@@ -1,3 +1,4 @@
+// frontend/pages/marketplace.js
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 import Layout from '../components/Layout';
@@ -5,7 +6,7 @@ import PropertyCard from '../components/PropertyCard';
 import { useWeb3 } from '../context/Web3Context';
 
 export default function Marketplace() {
-  const { account, provider, signer, realEstate, escrow } = useWeb3();
+  const { account, provider, signer, realEstate, escrow, loadBlockchainData } = useWeb3();
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all'); // all, verified, pending
@@ -15,18 +16,33 @@ export default function Marketplace() {
 
     setLoading(true);
     try {
-      const totalSupply = await realEstate.totalSupply();
+      // Use Transfer events instead of totalSupply()
+      const mintFilter = realEstate.filters.Transfer(
+        ethers.constants.AddressZero,
+        null
+      );
+      const mintEvents = await realEstate.queryFilter(mintFilter, 0, "latest");
+
+      const tokenIds = [
+        ...new Set(
+          mintEvents
+            .map((event) => event.args?.tokenId?.toNumber?.())
+            .filter(Boolean)
+        ),
+      ].sort((a, b) => a - b);
+
       const loadedProperties = [];
 
-      for (let i = 1; i <= totalSupply.toNumber(); i++) {
+      for (const tokenId of tokenIds) {
         try {
-          const listing = await escrow.listings(i);
+          const listing = await escrow.listings(tokenId);
 
           if (listing.isListed) {
-            const uri = await realEstate.tokenURI(i);
+            const uri = await realEstate.tokenURI(tokenId);
+            const owner = await realEstate.ownerOf(tokenId);
 
             loadedProperties.push({
-              id: i,
+              id: tokenId,
               uri,
               image: uri,
               price: ethers.utils.formatEther(listing.purchasePrice),
@@ -37,19 +53,21 @@ export default function Marketplace() {
               inspectionPassed: listing.inspectionPassed,
               lenderApproved: listing.lenderApproved,
               governmentVerified: listing.governmentVerified,
-              sellerApproved: listing.sellerApproved
+              sellerApproved: listing.sellerApproved,
+              currentOwner: owner,
             });
           }
         } catch (err) {
-          console.log(`No listing found for token ${i}`);
+          console.log(`Skipping token ${tokenId}:`, err.message);
         }
       }
 
       setProperties(loadedProperties);
     } catch (error) {
       console.error("Error loading properties:", error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [realEstate, escrow]);
 
   useEffect(() => {
@@ -66,6 +84,7 @@ export default function Marketplace() {
       await tx.wait();
       alert("Payment deposited successfully!");
       loadProperties();
+      await loadBlockchainData();
     } catch (error) {
       console.error("Buy failed:", error);
       alert(error?.reason || error?.message || "Buy failed.");
@@ -78,6 +97,7 @@ export default function Marketplace() {
       await tx.wait();
       alert("Inspection approved!");
       loadProperties();
+      await loadBlockchainData();
     } catch (error) {
       console.error("Inspection failed:", error);
       alert(error?.reason || error?.message || "Inspection failed.");
@@ -90,6 +110,7 @@ export default function Marketplace() {
       await tx.wait();
       alert("Loan approved!");
       loadProperties();
+      await loadBlockchainData();
     } catch (error) {
       console.error("Lender approval failed:", error);
       alert(error?.reason || error?.message || "Lender approval failed.");
@@ -102,6 +123,7 @@ export default function Marketplace() {
       await tx.wait();
       alert("Property verified!");
       loadProperties();
+      await loadBlockchainData();
     } catch (error) {
       console.error("Verification failed:", error);
       alert(error?.reason || error?.message || "Verification failed.");
@@ -118,6 +140,7 @@ export default function Marketplace() {
       
       alert("Sale completed!");
       loadProperties();
+      await loadBlockchainData();
     } catch (error) {
       console.error("Sale failed:", error);
       alert(error?.reason || error?.message || "Sale failed.");
@@ -145,19 +168,21 @@ export default function Marketplace() {
 
         {/* Filters */}
         <div className="flex flex-wrap justify-center gap-4 mb-8">
-          {['all', 'verified', 'pending'].map((f) => (
+          {[
+            { key: 'all', label: '📋 All Properties' },
+            { key: 'verified', label: '✅ Verified Only' },
+            { key: 'pending', label: '⏳ Pending Verification' },
+          ].map(({ key, label }) => (
             <button
-              key={f}
-              onClick={() => setFilter(f)}
+              key={key}
+              onClick={() => setFilter(key)}
               className={`px-6 py-2 rounded-full font-medium transition ${
-                filter === f
+                filter === key
                   ? 'bg-indigo-600 text-white'
                   : 'bg-white text-gray-600 hover:bg-gray-100'
               }`}
             >
-              {f === 'all' && '📋 All Properties'}
-              {f === 'verified' && '✅ Verified Only'}
-              {f === 'pending' && '⏳ Pending Verification'}
+              {label}
             </button>
           ))}
         </div>

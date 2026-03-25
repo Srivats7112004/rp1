@@ -1,17 +1,14 @@
 // frontend/utils/constants.js
-// Centralized configuration - update addresses after each deploy
 
 export const REAL_ESTATE_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
 export const ESCROW_ADDRESS = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
 
-// Role addresses (from Hardhat default accounts)
 export const ROLES = {
   inspector: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
   lender: "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
   government: "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
 };
 
-// Property types for metadata
 export const PROPERTY_TYPES = [
   "Residential",
   "Commercial",
@@ -20,7 +17,6 @@ export const PROPERTY_TYPES = [
   "Mixed Use",
 ];
 
-// Property status labels
 export const STATUS_STEPS = [
   { key: "listed", label: "Listed", icon: "📋" },
   { key: "governmentVerified", label: "Gov Verified", icon: "🏛" },

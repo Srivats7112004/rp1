@@ -25,19 +25,17 @@ export const Web3Provider = ({ children }) => {
   const [properties, setProperties] = useState([]);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState("user");
-  const [kycStatus, setKycStatus] = useState({}); // Mock KYC state
+  const [kycStatus, setKycStatus] = useState({});
 
-  // Determine user role
   const determineRole = useCallback((address) => {
     if (!address) return "user";
     const addr = address.toLowerCase();
     if (addr === ROLES.inspector.toLowerCase()) return "inspector";
     if (addr === ROLES.lender.toLowerCase()) return "lender";
     if (addr === ROLES.government.toLowerCase()) return "government";
-    return "user"; // could be buyer or seller
+    return "user";
   }, []);
 
-  // Connect wallet
   const connectWallet = async () => {
     try {
       if (!window.ethereum) {
@@ -45,78 +43,120 @@ export const Web3Provider = ({ children }) => {
         return;
       }
 
-      const accounts = await window.ethereum.request({
-        method: "eth_requestAccounts",
-      });
+      const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
+      const accounts = await web3Provider.send("eth_requestAccounts", []);
 
       if (accounts.length > 0) {
         const address = ethers.utils.getAddress(accounts[0]);
         setAccount(address);
         setUserRole(determineRole(address));
-
-        const prov = new ethers.providers.Web3Provider(window.ethereum);
-        setProvider(prov);
-        setSigner(prov.getSigner());
+        setProvider(web3Provider);
+        setSigner(web3Provider.getSigner());
       }
     } catch (error) {
       console.error("Wallet connect failed:", error);
     }
   };
 
-  // Load blockchain data
   const loadBlockchainData = useCallback(async () => {
     try {
-      if (!window.ethereum) return;
+      if (typeof window === "undefined" || !window.ethereum) return;
 
       setLoading(true);
 
-      const prov = new ethers.providers.Web3Provider(window.ethereum);
-      setProvider(prov);
+      const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
+      setProvider(web3Provider);
 
-      const accounts = await window.ethereum.request({
-        method: "eth_requestAccounts",
-      });
-
+      const accounts = await web3Provider.send("eth_requestAccounts", []);
       if (accounts.length > 0) {
         const address = ethers.utils.getAddress(accounts[0]);
         setAccount(address);
         setUserRole(determineRole(address));
-        setSigner(prov.getSigner());
+        setSigner(web3Provider.getSigner());
       }
 
       const realEstateContract = new ethers.Contract(
         REAL_ESTATE_ADDRESS,
         RealEstateABI.abi,
-        prov
+        web3Provider
       );
       setRealEstate(realEstateContract);
 
       const escrowContract = new ethers.Contract(
         ESCROW_ADDRESS,
         EscrowABI.abi,
-        prov
+        web3Provider
       );
       setEscrow(escrowContract);
 
-      // Load all properties
-      const totalSupply = await realEstateContract.totalSupply();
+      // Discover minted tokens using direct RPC eth_getLogs
+      const transferTopic = ethers.utils.id("Transfer(address,address,uint256)");
+      const zeroAddressPadded = ethers.utils.hexZeroPad(
+        ethers.constants.AddressZero,
+        32
+      );
+
+      let tokenIds = [];
+
+      try {
+        // Method 1: Direct RPC call for logs
+        const logs = await web3Provider.send("eth_getLogs", [
+          {
+            address: REAL_ESTATE_ADDRESS,
+            topics: [transferTopic, zeroAddressPadded],
+            fromBlock: "0x0",
+            toBlock: "latest",
+          },
+        ]);
+
+        tokenIds = [
+          ...new Set(
+            logs
+              .map((log) => {
+                if (log.topics && log.topics.length >= 4) {
+                  return parseInt(log.topics[3], 16);
+                }
+                return null;
+              })
+              .filter((id) => id !== null && id > 0)
+          ),
+        ].sort((a, b) => a - b);
+
+        console.log("Token IDs from eth_getLogs:", tokenIds);
+      } catch (e) {
+        console.log("eth_getLogs failed:", e.message);
+
+        // Method 2: Scan ownerOf from 1 upwards
+        console.log("Falling back to ownerOf scan...");
+        for (let i = 1; i <= 100; i++) {
+          try {
+            await realEstateContract.ownerOf(i);
+            tokenIds.push(i);
+          } catch (err) {
+            break;
+          }
+        }
+        console.log("Token IDs from ownerOf scan:", tokenIds);
+      }
+
+      // Load property details for each token
       const loadedProperties = [];
 
-      for (let i = 1; i <= totalSupply.toNumber(); i++) {
+      for (const tokenId of tokenIds) {
         try {
-          const listing = await escrowContract.listings(i);
+          const listing = await escrowContract.listings(tokenId);
+          const owner = await realEstateContract.ownerOf(tokenId);
 
           if (listing.isListed) {
-            const uri = await realEstateContract.tokenURI(i);
-            const owner = await realEstateContract.ownerOf(i);
+            const uri = await realEstateContract.tokenURI(tokenId);
             const metadata = await parseTokenMetadata(uri);
             const buyerDeposited = !isZeroAddress(listing.buyer);
 
             loadedProperties.push({
-              id: i,
+              id: tokenId,
               uri,
               image: metadata.image || uri,
-              name: metadata.name || `Property #${i}`,
+              name: metadata.name || `Property #${tokenId}`,
               description: metadata.description || "",
               location: metadata.location || "",
               propertyType: metadata.propertyType || "",
@@ -138,7 +178,7 @@ export const Web3Provider = ({ children }) => {
             });
           }
         } catch (err) {
-          console.log(`Skipping token ${i}:`, err.message);
+          console.log(`Skipping token ${tokenId}:`, err.message);
         }
       }
 
@@ -150,7 +190,6 @@ export const Web3Provider = ({ children }) => {
     }
   }, [determineRole]);
 
-  // Mock KYC functions
   const requestKYC = (address) => {
     setKycStatus((prev) => ({
       ...prev,
@@ -181,9 +220,8 @@ export const Web3Provider = ({ children }) => {
     return getKYCStatus(address) === "verified";
   };
 
-  // Listen for account changes
   useEffect(() => {
-    if (window.ethereum) {
+    if (typeof window !== "undefined" && window.ethereum) {
       loadBlockchainData();
 
       const handleAccountsChanged = (accounts) => {
@@ -202,12 +240,11 @@ export const Web3Provider = ({ children }) => {
 
       return () => {
         if (window.ethereum.removeListener) {
-          window.ethereum.removeListener(
-            "accountsChanged",
-            handleAccountsChanged
-          );
+          window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
         }
       };
+    } else {
+      setLoading(false);
     }
   }, [loadBlockchainData, determineRole]);
 
@@ -222,7 +259,6 @@ export const Web3Provider = ({ children }) => {
     userRole,
     connectWallet,
     loadBlockchainData,
-    // KYC
     requestKYC,
     approveKYC,
     rejectKYC,
